@@ -441,7 +441,7 @@
           <div class="order-desc">
             Add items to your cart and submit an inquiry. We will reply with a final quote within 1 business day.<br>
             <strong>US customers:</strong> 12% DDP duty is automatically added to item total.<br>
-            <strong>All orders:</strong> 2% handling fee applied to (items subtotal + shipping).
+            <strong>Tier-based handling fee:</strong> 🌱 Starter (&lt; $1,000) +2% / 🚀 Volume ($1,000-$4,999) FREE / 🏆 VIP ($5,000+) FREE + 2% off
           </div>
 
           <!-- 商品選択 -->
@@ -506,10 +506,12 @@
             <div class="ps-row sub" style="border-bottom:1px solid rgba(255,255,255,0.2);padding-bottom:6px;margin-bottom:4px;">
               <span>Payment Currency</span><span id="ps-cur-label" style="font-weight:700;color:var(--accent);">USD</span>
             </div>
+            <div class="ps-row sub" id="ps-tier-row" style="border-bottom:1px solid rgba(255,255,255,0.2);padding-bottom:6px;margin-bottom:4px;"><span>Pricing Tier</span><span id="ps-tier-value" style="font-weight:700;color:var(--accent);">🌱 Starter</span></div>
             <div class="ps-row sub"><span>Subtotal (items)</span><span id="ps-subtotal">$0.00</span></div>
             <div class="ps-row duty" id="ps-duty-row" style="display:none"><span>DDP Duty (US, 12%)</span><span id="ps-duty">$0.00</span></div>
             <div class="ps-row sub"><span id="ps-ship-label">Shipping (Expedited, est.)</span><span id="ps-shipping">$0.00</span></div>
-            <div class="ps-row sub"><span>Handling Fee (2%)</span><span id="ps-handling">$0.00</span></div>
+            <div class="ps-row sub"><span id="ps-handling-label">Handling Fee (2%)</span><span id="ps-handling">$0.00</span></div>
+            <div class="ps-row sub" id="ps-vip-discount-row" style="display:none"><span>VIP Discount (-2%)</span><span id="ps-vip-discount">-$0.00</span></div>
             <div class="ps-row sub" id="ps-paypal-subtotal-row" style="display:none"><span>Subtotal pre-PayPal</span><span id="ps-paypal-subtotal">$0.00</span></div>
             <div class="ps-row sub" id="ps-paypal-fee-row" style="display:none"><span>PayPal Fee (5%)</span><span id="ps-paypal-fee">$0.00</span></div>
             <div class="ps-row total"><span>TOTAL</span><span id="ps-total">$0.00</span></div>
@@ -758,6 +760,18 @@
       return rates[rates.length - 1].price_usd;
     }
 
+    // Tier 判定関数（設計図 v0.3 確定版）
+    // subtotalUsd: USD 換算の items subtotal
+    function determineTier(subtotalUsd) {
+      if (subtotalUsd < 1000) {
+        return { tier: 'Starter', emoji: '🌱', handlingRate: 0.02, discountRate: 0,    label: '+2% handling fee',                          handlingLabel: 'Handling Fee (2%)' };
+      } else if (subtotalUsd < 5000) {
+        return { tier: 'Volume',  emoji: '🚀', handlingRate: 0,    discountRate: 0,    label: 'Handling fee FREE (save 2%)',               handlingLabel: 'Handling Fee (FREE)' };
+      } else {
+        return { tier: 'VIP',     emoji: '🏆', handlingRate: 0,    discountRate: 0.02, label: 'Handling fee FREE + extra 2% off (save 4%)', handlingLabel: 'Handling Fee (FREE)' };
+      }
+    }
+
     function updatePriceSummary() {
       const isUS   = document.getElementById('dest-country').value === 'US';
       const method = document.getElementById('ship-method').value;
@@ -771,21 +785,27 @@
       const totalWeight = cart.reduce((s, c) => s + (c.weight_g || 0) * c.qty, 0);
       const shipping    = calcShipping(totalWeight, isUS, shipSel.value);
       const duty        = isUS ? subtotal * 0.12 : 0;
-      const handling    = (subtotal + shipping) * 0.02;
-      const total       = subtotal + duty + shipping + handling;
+      // Tier 連動: handling は subtotal ベース（spec §2: total = subtotal × multiplier）
+      const tierInfo    = determineTier(subtotal);
+      const handling    = subtotal * tierInfo.handlingRate;
+      const vipDiscount = subtotal * tierInfo.discountRate;
+      const total       = subtotal + duty + shipping + handling - vipDiscount;
 
       const cur = orderCurrency; const sym = CUR_SYM[cur] || '$';
       const subCur  = cart.reduce((s,c) => { const p=(c.prices&&c.prices[cur])||usdTo(c.price_usd,cur); return s+p*c.qty; }, 0);
       const shipCur = usdTo(shipping, cur);
       const dutyCur = usdTo(duty, cur);
       const handCur = usdTo(handling, cur);
-      const subtotalPrePaypalCur = subCur + dutyCur + shipCur + handCur;
+      const vipDiscCur = usdTo(vipDiscount, cur);
+      const subtotalPrePaypalCur = subCur + dutyCur + shipCur + handCur - vipDiscCur;
       const pm = getSelectedPaymentMethod();
       const paypalFeeCur = (pm === 'paypal') ? subtotalPrePaypalCur * 0.05 : 0;
       const finalTotCur  = subtotalPrePaypalCur + paypalFeeCur;
       document.getElementById('ps-cur-label').textContent  = CUR_NM[cur] || cur.toUpperCase();
+      document.getElementById('ps-tier-value').textContent = tierInfo.emoji + ' ' + tierInfo.tier;
       document.getElementById('ps-subtotal').textContent   = sym + subCur.toFixed(2);
       document.getElementById('ps-shipping').textContent   = sym + shipCur.toFixed(2);
+      document.getElementById('ps-handling-label').textContent = tierInfo.handlingLabel;
       document.getElementById('ps-handling').textContent   = sym + handCur.toFixed(2);
       document.getElementById('ps-total').textContent      = sym + finalTotCur.toFixed(2);
       document.getElementById('ps-ship-label').textContent =
@@ -793,6 +813,13 @@
       const dutyRow = document.getElementById('ps-duty-row');
       dutyRow.style.display = isUS ? 'flex' : 'none';
       if (isUS) document.getElementById('ps-duty').textContent = sym + dutyCur.toFixed(2);
+      const vipRow = document.getElementById('ps-vip-discount-row');
+      if (tierInfo.tier === 'VIP') {
+        document.getElementById('ps-vip-discount').textContent = '-' + sym + vipDiscCur.toFixed(2);
+        vipRow.style.display = 'flex';
+      } else {
+        vipRow.style.display = 'none';
+      }
       const ppSubRow = document.getElementById('ps-paypal-subtotal-row');
       const ppFeeRow = document.getElementById('ps-paypal-fee-row');
       if (pm === 'paypal') {
@@ -809,6 +836,9 @@
         subtotal: subCur.toFixed(2), duty: dutyCur.toFixed(2),
         shipping: shipCur.toFixed(2), handling: handCur.toFixed(2), total: finalTotCur.toFixed(2),
         subtotal_usd: subtotal.toFixed(2),
+        tier: tierInfo.tier,
+        tier_label: tierInfo.label,
+        vip_discount: vipDiscCur.toFixed(2),
         payment_method: pm,
         subtotal_pre_paypal: subtotalPrePaypalCur.toFixed(2),
         paypal_fee: paypalFeeCur.toFixed(2)
